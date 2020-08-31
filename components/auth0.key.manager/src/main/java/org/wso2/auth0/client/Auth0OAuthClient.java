@@ -20,6 +20,7 @@ package org.wso2.auth0.client;
 
 import com.google.gson.Gson;
 import feign.Feign;
+import feign.FeignException;
 import feign.gson.GsonDecoder;
 import feign.gson.GsonEncoder;
 import feign.okhttp.OkHttpClient;
@@ -31,23 +32,13 @@ import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
 import org.apache.http.HttpEntity;
 import org.apache.http.HttpResponse;
-import org.apache.http.NameValuePair;
-import org.apache.http.client.HttpClient;
-import org.apache.http.client.entity.UrlEncodedFormEntity;
 import org.apache.http.client.methods.HttpPost;
 import org.apache.http.entity.StringEntity;
 import org.apache.http.impl.client.CloseableHttpClient;
 import org.apache.http.impl.client.HttpClientBuilder;
-import org.apache.http.message.BasicNameValuePair;
+import org.wso2.auth0.client.model.*;
 import org.wso2.carbon.apimgt.api.APIManagementException;
-import org.wso2.carbon.apimgt.api.model.API;
-import org.wso2.carbon.apimgt.api.model.AccessTokenInfo;
-import org.wso2.carbon.apimgt.api.model.AccessTokenRequest;
-import org.wso2.carbon.apimgt.api.model.ApplicationConstants;
-import org.wso2.carbon.apimgt.api.model.KeyManagerConfiguration;
-import org.wso2.carbon.apimgt.api.model.OAuthAppRequest;
-import org.wso2.carbon.apimgt.api.model.OAuthApplicationInfo;
-import org.wso2.carbon.apimgt.api.model.Scope;
+import org.wso2.carbon.apimgt.api.model.*;
 import org.wso2.carbon.apimgt.impl.APIConstants;
 import org.wso2.carbon.apimgt.impl.AbstractKeyManager;
 import org.wso2.carbon.apimgt.impl.dao.ApiMgtDAO;
@@ -55,34 +46,21 @@ import org.wso2.carbon.apimgt.impl.utils.APIUtil;
 import org.wso2.carbon.user.core.UserCoreConstants;
 import org.wso2.carbon.user.core.util.UserCoreUtil;
 import org.wso2.carbon.utils.multitenancy.MultitenantUtils;
-import org.wso2.auth0.client.model.Auth0AccessTokenRequest;
-import org.wso2.auth0.client.model.Auth0AccessTokenResponse;
-import org.wso2.auth0.client.model.Auth0APIKeyInterceptor;
-import org.wso2.auth0.client.model.Auth0ResourceServerInfo;
-import org.wso2.auth0.client.model.Auth0ClientInfo;
-import org.wso2.auth0.client.model.Auth0DCRClient;
 
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.UnsupportedEncodingException;
-import java.util.ArrayList;
-import java.util.Arrays;
-import java.util.HashMap;
-import java.util.LinkedHashSet;
-import java.util.List;
-import java.util.Map;
-import java.util.Set;
+import java.util.*;
 
 public class Auth0OAuthClient extends AbstractKeyManager {
     private static final Log log = LogFactory.getLog(Auth0OAuthClient.class);
-    private static Auth0AccessTokenResponse applicationAPITokenInfo = null;
     private Auth0DCRClient auth0DCRClient;
+    private Auth0ResourceServer auth0ResourceServer;
 
     @Override
     public OAuthApplicationInfo createApplication(OAuthAppRequest oAuthAppRequest) throws APIManagementException {
         OAuthApplicationInfo oAuthApplicationInfo = oAuthAppRequest.getOAuthApplicationInfo();
         Auth0ClientInfo clientInfo = createClientInfoFromOauthApplicationInfo(oAuthApplicationInfo);
-        renewApplicationAPIKeyIfExpired();
         checkAndCreateAPIIfNotExist();
         Auth0ClientInfo createdApplication = auth0DCRClient.createApplication(clientInfo);
         if (createdApplication != null) {
@@ -156,7 +134,20 @@ public class Auth0OAuthClient extends AbstractKeyManager {
             String[] calBackUris = callBackURL.split(",");
             clientInfo.setRedirectUris(Arrays.asList(calBackUris));
         }
-        clientInfo.setApplicationType(Auth0Constants.DEFAULT_CLIENT_APPLICATION_TYPE);
+        Object parameter = oAuthApplicationInfo.getParameter(APIConstants.JSON_ADDITIONAL_PROPERTIES);
+        Map<String, Object> additionalProperties = new HashMap<>();
+        if (parameter instanceof String) {
+            additionalProperties = new Gson().fromJson((String) parameter, Map.class);
+        }
+        if (additionalProperties.containsKey((Auth0Constants.APP_TYPE))) {
+            clientInfo.setApplicationType((String) additionalProperties.get((Auth0Constants.APP_TYPE)));
+        } else {
+            clientInfo.setApplicationType(Auth0Constants.DEFAULT_CLIENT_APPLICATION_TYPE);
+        }
+        if (additionalProperties.containsKey(Auth0Constants.TOKEN_ENDPOINT_AUTH_METHOD)) {
+            clientInfo.setTokenEndpointAuthMethod((String)
+                    additionalProperties.get(Auth0Constants.TOKEN_ENDPOINT_AUTH_METHOD));
+        }
         return clientInfo;
     }
 
@@ -165,7 +156,6 @@ public class Auth0OAuthClient extends AbstractKeyManager {
         OAuthApplicationInfo oAuthApplicationInfo = oAuthAppRequest.getOAuthApplicationInfo();
         Auth0ClientInfo clientInfo = createClientInfoFromOauthApplicationInfo(oAuthApplicationInfo);
         clientInfo.setClientSecret(oAuthApplicationInfo.getClientSecret());
-        renewApplicationAPIKeyIfExpired();
         checkAndCreateAPIIfNotExist();
         Auth0ClientInfo createdApplication = auth0DCRClient.updateApplication(oAuthApplicationInfo.getClientId(), clientInfo);
         if (createdApplication != null) {
@@ -177,13 +167,11 @@ public class Auth0OAuthClient extends AbstractKeyManager {
 
     @Override
     public void deleteApplication(String clientID) throws APIManagementException {
-        renewApplicationAPIKeyIfExpired();
         auth0DCRClient.deleteApplication(clientID);
     }
 
     @Override
     public OAuthApplicationInfo retrieveApplication(String clientID) throws APIManagementException {
-        renewApplicationAPIKeyIfExpired();
         Auth0ClientInfo auth0ClientInfo = auth0DCRClient.getApplication(clientID);
         OAuthApplicationInfo createdOauthApplication = createOAuthAppInfoFromResponse(auth0ClientInfo);
         return createdOauthApplication;
@@ -270,7 +258,6 @@ public class Auth0OAuthClient extends AbstractKeyManager {
 
     @Override
     public String getNewApplicationConsumerSecret(AccessTokenRequest accessTokenRequest) throws APIManagementException {
-        renewApplicationAPIKeyIfExpired();
         checkAndCreateAPIIfNotExist();
         Auth0ClientInfo createdApplication = auth0DCRClient.regenerateClientSecret(accessTokenRequest.getClientId());
         return createdApplication.getClientSecret();
@@ -293,92 +280,51 @@ public class Auth0OAuthClient extends AbstractKeyManager {
 
     @Override
     public void loadConfiguration(KeyManagerConfiguration keyManagerConfiguration) throws APIManagementException {
-        this.configuration = keyManagerConfiguration;
-        renewApplicationAPIKeyIfExpired();
-        checkAndCreateAPIIfNotExist();
-    }
-
-    /**
-     * Gets new access token for the management rest full api if expired or not generated at all.
-     */
-    private void renewApplicationAPIKeyIfExpired() {
-        if (applicationAPITokenInfo != null && (System.currentTimeMillis() <
-                (applicationAPITokenInfo.getCreated_at() + (applicationAPITokenInfo.getExpiry() * 1000)))) {
-            return;
-        }
+        configuration = keyManagerConfiguration;
         try {
-            HttpClient httpClient = HttpClientBuilder.create().useSystemProperties().build();
-            String tokenEndpoint = (String) this.configuration.getParameter(APIConstants.KeyManager.TOKEN_ENDPOINT);
-            String clientId = (String) this.configuration.getParameter(Auth0Constants.CLIENT_ID);
-            String clientSecret = (String) this.configuration.getParameter(Auth0Constants.CLIENT_SECRET);
-            String audience = (String) this.configuration.getParameter(Auth0Constants.AUDIENCE);
+            Auth0APIKeyInterceptor auth0APIKeyInterceptor = new Auth0APIKeyInterceptor(
+                    (String) keyManagerConfiguration.getParameter(APIConstants.KeyManager.TOKEN_ENDPOINT),
+                    (String) keyManagerConfiguration.getParameter(Auth0Constants.CLIENT_ID),
+                    (String) keyManagerConfiguration.getParameter(Auth0Constants.CLIENT_SECRET),
+                    (String) keyManagerConfiguration.getParameter(Auth0Constants.AUDIENCE));
             String clientRegistrationEndpoint =
-                    ((String) configuration.getParameter(Auth0Constants.AUDIENCE)).concat("clients");
-            HttpPost httpPost = new HttpPost(tokenEndpoint);
-            List<NameValuePair> parameters = new ArrayList<NameValuePair>();
-            parameters.add(new BasicNameValuePair(Auth0Constants.CLIENT_ID, clientId));
-            parameters.add(new BasicNameValuePair(Auth0Constants.CLIENT_SECRET, clientSecret));
-            parameters.add(new BasicNameValuePair(Auth0Constants.GRANT_TYPE,
-                    Auth0Constants.GRANT_TYPE_CLIENT_CREDENTIALS));
-            parameters.add(new BasicNameValuePair(Auth0Constants.AUDIENCE, audience));
-            httpPost.setEntity(new UrlEncodedFormEntity(parameters));
-            if (log.isDebugEnabled()) {
-                log.debug("Invoking HTTP request to get the access token for System API.");
-            }
-            HttpResponse response = httpClient.execute(httpPost);
-            int statusCode = response.getStatusLine().getStatusCode();
-            HttpEntity entity = response.getEntity();
-            if (entity == null) {
-                new APIManagementException(String.format(Auth0Constants.STRING_FORMAT,
-                        Auth0Constants.ERROR_COULD_NOT_READ_HTTP_ENTITY, response));
-            }
-            if (HttpStatus.SC_OK == statusCode) {
-                try (InputStream inputStream = entity.getContent()) {
-                    String content = IOUtils.toString(inputStream);
-                    applicationAPITokenInfo = new Gson().fromJson(content, Auth0AccessTokenResponse.class);
-                    applicationAPITokenInfo.setCreated_at(System.currentTimeMillis());
-                }
-                Auth0APIKeyInterceptor auth0APIKeyInterceptor = new Auth0APIKeyInterceptor(
-                        applicationAPITokenInfo.getAccessToken());
-                auth0DCRClient = Feign.builder().client(new OkHttpClient()).encoder(new GsonEncoder())
-                        .decoder(new GsonDecoder()).logger(new Slf4jLogger()).requestInterceptor(auth0APIKeyInterceptor)
-                        .target(Auth0DCRClient.class, clientRegistrationEndpoint);
-            }
-        } catch (UnsupportedEncodingException e) {
-            new APIManagementException(Auth0Constants.ERROR_ENCODING_METHOD_NOT_SUPPORTED, e);
+                    ((String) keyManagerConfiguration.getParameter(Auth0Constants.AUDIENCE)).concat("clients");
+            String resourceServerEndpoint =
+                    ((String) keyManagerConfiguration.getParameter(Auth0Constants.AUDIENCE)).concat("resource-servers");
+            auth0DCRClient = Feign.builder().client(new OkHttpClient()).encoder(new GsonEncoder())
+                    .decoder(new GsonDecoder()).logger(new Slf4jLogger()).requestInterceptor(auth0APIKeyInterceptor)
+                    .target(Auth0DCRClient.class, clientRegistrationEndpoint);
+            auth0ResourceServer = Feign.builder().client(new OkHttpClient()).encoder(new GsonEncoder())
+                    .decoder(new GsonDecoder()).logger(new Slf4jLogger()).requestInterceptor(auth0APIKeyInterceptor)
+                    .target(Auth0ResourceServer.class, resourceServerEndpoint);
         } catch (IOException e) {
-            new APIManagementException(Auth0Constants.ERROR_OCCURRED_WHILE_READ_OR_CLOSE_BUFFER_READER, e);
+            throw new APIManagementException(Auth0Constants.ERROR_COULD_NOT_READ_HTTP_ENTITY);
         }
+        checkAndCreateAPIIfNotExist();
     }
 
     /**
      * Create Auth0 Resource Server if not created for WSO2 API Manager
      */
-    private void checkAndCreateAPIIfNotExist() {
-        try (CloseableHttpClient httpClient = HttpClientBuilder.create().build()) {
-            String audience = APIUtil.getServerURL();
-            String tokenEndpoint = ((String) configuration.getParameter(Auth0Constants.AUDIENCE))
-                    .concat("resource-servers");
-            HttpPost httpPost = new HttpPost(tokenEndpoint);
-            Auth0ResourceServerInfo auth0ResourceServerInfo = new Auth0ResourceServerInfo();
-            auth0ResourceServerInfo.setName(Auth0Constants.AUTH0_RESOURCE_SERVER);
-            auth0ResourceServerInfo.setIdentifier(audience);
-            auth0ResourceServerInfo.setTokenLifetime(Auth0Constants.DEFAULT_TOKEN_LIFETIME);
-            StringEntity requestEntity = new StringEntity(new Gson().toJson(auth0ResourceServerInfo));
-            httpPost.setHeader(Auth0Constants.CONTENT_TYPE, Auth0Constants.CONTENT_TYPE_JSON);
-            httpPost.setHeader(Auth0Constants.AUTH_HEADER, "Bearer ".concat(applicationAPITokenInfo.getAccessToken()));
-            httpPost.setEntity(requestEntity);
-            HttpResponse response = httpClient.execute(httpPost);
-            int statusCode = response.getStatusLine().getStatusCode();
-            if (statusCode == 200) {
-                log.info("Successfully created Auth0 API : " + Auth0Constants.AUTH0_RESOURCE_SERVER);
-            } else if (statusCode == 409) {
-                log.warn("Auth0 API : " + Auth0Constants.AUTH0_RESOURCE_SERVER + " Already exist");
+    private void checkAndCreateAPIIfNotExist() throws APIManagementException {
+        String audience = APIUtil.getServerURL();
+        try {
+            Auth0ResourceServerInfo resourceServer = new Auth0ResourceServerInfo();
+            resourceServer.setIdentifier(audience);
+            resourceServer.setName(Auth0Constants.AUTH0_RESOURCE_SERVER);
+            resourceServer.setTokenLifetime(Auth0Constants.DEFAULT_TOKEN_LIFETIME);
+            Auth0ResourceServerInfo createdResourceServer = auth0ResourceServer.createResourceServer(resourceServer);
+            if (createdResourceServer != null) {
+                log.info("Resource server created for : " + audience);
+            } else {
+                log.error("Error while creating resource server for : " + audience);
             }
-        } catch (IOException e) {
-            new APIManagementException(Auth0Constants.ERROR_OCCURRED_WHILE_READ_OR_CLOSE_BUFFER_READER, e);
-        } catch (APIManagementException e) {
-            e.printStackTrace();
+        } catch (FeignException exception) {
+            if (exception.status() == 409) {
+                log.warn("Resource server already created for  : ");
+            } else {
+                log.error("Error while creating resource server for : " + audience, exception);
+            }
         }
     }
 

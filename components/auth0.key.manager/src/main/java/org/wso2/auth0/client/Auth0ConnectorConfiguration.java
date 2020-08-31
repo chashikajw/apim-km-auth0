@@ -23,6 +23,7 @@ import org.wso2.carbon.apimgt.api.model.ConfigurationDto;
 import org.wso2.carbon.apimgt.api.model.KeyManagerConnectorConfiguration;
 
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
 
@@ -65,6 +66,16 @@ public class Auth0ConnectorConfiguration implements KeyManagerConnectorConfigura
     @Override
     public List<ConfigurationDto> getApplicationConfigurations() {
         List<ConfigurationDto> configurationDtoList = new ArrayList<>();
+        configurationDtoList
+                .add(new ConfigurationDto("app_type", "Application Type", "select",
+                        "Type Of Application to create", "regular_web", false,
+                        false, Arrays.asList("regular_web", "native", "spa", "non_interactive"), false));
+        configurationDtoList
+                .add(new ConfigurationDto("token_endpoint_auth_method",
+                        "Token endpoint Authentication Method","select",
+                        "How to Authenticate Token Endpoint", "client_secret_basic", true,
+                        true, Arrays.asList("client_secret_basic", "client_secret_post"),
+                        false));
         return configurationDtoList;
     }
 

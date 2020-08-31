@@ -29,14 +29,15 @@ public class Auth0Constants {
     public static final String GRANT_TYPE = "grant_type";
     public static final String GRANT_TYPE_CLIENT_CREDENTIALS = "client_credentials";
     public static final String AUTH0_RESOURCE_SERVER = "WSO2 resource server API";
-    public static final long DEFAULT_TOKEN_LIFETIME = 3600;
     public static final String CONTENT_TYPE = "Content-type";
     public static final String CONTENT_TYPE_JSON = "application/json";
     public static final String STRING_FORMAT = "%s %s";
-    public static final String AUTH_HEADER = "Authorization";
+    public static final String APP_TYPE = "app_type";
     public static final String DEFAULT_CLIENT_APPLICATION_TYPE = "regular_web";
+    public static final String TOKEN_ENDPOINT_AUTH_METHOD = "token_endpoint_auth_method";
     public static final String ERROR_COULD_NOT_READ_HTTP_ENTITY = "Could not read http entity for response";
     public static final String ERROR_ENCODING_METHOD_NOT_SUPPORTED = "Encoding method is not supported";
     public static final String ERROR_OCCURRED_WHILE_READ_OR_CLOSE_BUFFER_READER = "Error has occurred while reading " +
             "or closing buffer reader";
+    public static final long DEFAULT_TOKEN_LIFETIME = 86400;
 }

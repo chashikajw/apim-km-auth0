@@ -19,6 +19,8 @@ to manage the OAuth clients and tokens required by WSO2 API Manager. This is a c
     ![alt text](images/New%20Application.png)
     
     ![alt text](images/permision-to-use-app.png)
+   
+   Make sure you have granted all the permissions to Create, Manage Apps and Resource servers.    
 
 ### Step 2: Configure WSO2 API Manager
 
