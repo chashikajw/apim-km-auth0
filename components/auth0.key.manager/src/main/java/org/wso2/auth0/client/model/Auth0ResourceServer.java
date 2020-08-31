@@ -1,7 +1,6 @@
 package org.wso2.auth0.client.model;
 
 import feign.Headers;
-import feign.Param;
 import feign.RequestLine;
 
 public interface Auth0ResourceServer {
